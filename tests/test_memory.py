@@ -73,7 +73,7 @@ class SummarizationTests(unittest.TestCase):
         memory.add("assistant", "Hello Sarah")
         memory.add("user", "I live in Lisbon")
         memory.add("assistant", "Noted")
-        prompt = llm.generate.call_args.args[0][0]["content"]
+        prompt = llm.generate.call_args.args[0][1]["content"]
         self.assertIn("Summary: Name: Sarah", prompt)
         self.assertIn("user: I live in Lisbon", prompt)
         messages = memory.get_messages()
