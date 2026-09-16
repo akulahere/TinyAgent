@@ -61,8 +61,9 @@ class Tools:
             try:
                 value, end = decoder.raw_decode(text, start)
             except json.JSONDecodeError:
-                cursor = start + 1
-                continue
+                if '"tool"' in text:
+                    raise ValueError("Invalid JSON tool call") from None
+                break
             if isinstance(value, dict) and "tool" in value:
                 calls.append(value)
             cursor = end

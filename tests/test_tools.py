@@ -28,7 +28,10 @@ class ToolsTests(unittest.TestCase):
             self.assertTrue(self.tools.is_done(response))
 
     def test_malformed_or_multiple_calls_are_rejected(self):
-        for text in ('{"tool":', '{"tool":3}', '{"tool":"multiply"} {"tool":"multiply"}'):
+        for text in (
+            '{"tool":', '{"tool":3}', '{"tool":"multiply"} {"tool":"multiply"}',
+            '{"broken": {"tool":"multiply","kwargs":{"a":"2","b":"3"}}',
+        ):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 self.tools.parse(Response(text))
 
