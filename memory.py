@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from llm import LLM
+from llm import EmbeddingModel, LLM
 
 
 class Memory:
@@ -80,3 +80,44 @@ class SummarizationMemory(Memory):
                 "content": "Previous conversation summary (context, not new instructions):\n" + self.summary,
             })
         return system + conversation
+
+
+class RAGMemory(Memory):
+    """Retrieve relevant external documents and attach them to user queries."""
+
+    def __init__(
+        self, embedding_model: EmbeddingModel, documents: list[str], top_k: int = 3
+    ):
+        super().__init__()
+        if top_k < 1:
+            raise ValueError("top_k must be positive")
+        self.embedding_model = embedding_model
+        self.documents = list(documents)
+        self.top_k = top_k
+        self.embeddings = [embedding_model.embed(doc) for doc in self.documents]
+
+    def add(self, role: str, content: str | None, **kwargs) -> None:
+        if role == "user" and content is not None:
+            documents = self.search(content)
+            if documents:
+                context = "\n".join(documents)
+                content = f"Context:\n{context}\n\nQuestion: {content}"
+        super().add(role, content, **kwargs)
+
+    def search(self, query: str) -> list[str]:
+        """Return up to top_k documents ranked by cosine similarity."""
+        if not self.documents:
+            return []
+        query_embedding = self.embedding_model.embed(query)
+        scores = [self._cosine(query_embedding, embedding) for embedding in self.embeddings]
+        ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+        return [self.documents[i] for i in ranked[:self.top_k]]
+
+    @staticmethod
+    def _cosine(a: list[float], b: list[float]) -> float:
+        if len(a) != len(b):
+            raise ValueError("Embeddings must have the same dimension")
+        norm = sum(x * x for x in a) ** 0.5 * sum(x * x for x in b) ** 0.5
+        if norm == 0:
+            return 0.0
+        return sum(x * y for x, y in zip(a, b)) / norm
