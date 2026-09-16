@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 
 from llm import EmbeddingModel, LLM
 
@@ -10,17 +11,23 @@ class Memory:
         self.messages: list[dict] = []
 
     def add(
-        self, role: str, content: str | None, tool_call: dict | None = None, **kwargs
+        self, role: str, content: str | None, tool_call: dict | None = None,
+        *, is_observation: bool = False, defer_summary: bool = False, **kwargs
     ) -> None:
         """Store a message and optional tool metadata."""
         message = {**kwargs, "role": role, "content": content}
         if tool_call is not None:
             message["tool_calls"] = [deepcopy(tool_call)]
+        if is_observation:
+            message["_observation"] = True
         self.messages.append(message)
 
     def get_messages(self) -> list[dict]:
         """Return a snapshot suitable for an LLM request."""
-        return deepcopy(self.messages)
+        messages = deepcopy(self.messages)
+        for message in messages:
+            message.pop("_observation", None)
+        return messages
 
 
 class TrimmingMemory(Memory):
@@ -34,7 +41,10 @@ class TrimmingMemory(Memory):
 
     def add(self, role: str, content: str | None, **kwargs) -> None:
         super().add(role, content, **kwargs)
-        starts = [i for i, message in enumerate(self.messages) if message["role"] == "user"]
+        starts = [
+            i for i, message in enumerate(self.messages)
+            if message["role"] == "user" and not message.get("_observation")
+        ]
         if len(starts) > self.max_turns:
             cutoff = starts[-self.max_turns]
             system = [message for message in self.messages[:cutoff] if message["role"] == "system"]
@@ -51,11 +61,13 @@ class SummarizationMemory(Memory):
 
     def add(self, role: str, content: str | None, **kwargs) -> None:
         super().add(role, content, **kwargs)
-        if role != "assistant":
+        completed = (role == "assistant" and not kwargs.get("defer_summary")) or kwargs.get("is_observation")
+        if not completed:
             return
 
         conversation = "\n".join(
             f"{message['role']}: {message['content']}"
+            + (f"\ntool_calls: {json.dumps(message['tool_calls'])}" if message.get("tool_calls") else "")
             for message in self.messages if message["role"] != "system"
         )
         instruction = (
@@ -104,7 +116,7 @@ class RAGMemory(Memory):
         self.embeddings = [embedding_model.embed(doc) for doc in self.documents]
 
     def add(self, role: str, content: str | None, **kwargs) -> None:
-        if role == "user" and content is not None:
+        if role == "user" and content is not None and not kwargs.get("is_observation"):
             documents = self.search(content)
             if documents:
                 context = "\n".join(documents)
