@@ -1,16 +1,16 @@
 import json
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class Response:
     """A generated message with optional reasoning and a tool call."""
 
-    content: str | None
-    reasoning: str | None
-    tool_call: dict | None
-    metadata: dict
+    content: str | None = ""
+    reasoning: str | None = None
+    tool_call: dict | None = None
+    metadata: dict = field(default_factory=dict)
 
 
 class LLM:
