@@ -44,6 +44,7 @@ class LLM:
         # Tools and Reasoning
         if tools:
             body["tools"] = tools
+            body["parallel_tool_calls"] = False
         if not self.think:
             body["reasoning_effort"] = "none"
 
@@ -62,6 +63,8 @@ class LLM:
         # Extract message, tool_call, and metadata
         message = data["choices"][0]["message"]
         tool_calls = message.get("tool_calls")
+        if tool_calls and len(tool_calls) > 1:
+            raise ValueError("Only one tool call per step is supported; no calls were executed")
         tool_call = tool_calls[0] if tool_calls else None
         metadata = {
             "model": data["model"],

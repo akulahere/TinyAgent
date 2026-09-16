@@ -55,6 +55,13 @@ class LLMTests(unittest.TestCase):
         body = json.loads(send.call_args.args[0].data)
         self.assertNotIn("reasoning_effort", body)
         self.assertEqual(body["tools"], tools)
+        self.assertIs(body["parallel_tool_calls"], False)
         self.assertIsNone(response.content)
         self.assertEqual(response.reasoning, "Need a lookup")
         self.assertEqual(response.tool_call, call)
+
+    def test_multiple_native_calls_are_not_silently_discarded(self):
+        payload = {"choices": [{"message": {"tool_calls": [{"id": "1"}, {"id": "2"}]}}]}
+        with patch("llm.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(payload).encode())):
+            with self.assertRaisesRegex(ValueError, "Only one tool call"):
+                LLM("test").generate([])

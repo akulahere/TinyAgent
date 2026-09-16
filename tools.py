@@ -1,7 +1,7 @@
 import inspect
 import json
 from dataclasses import replace
-from typing import Any, Callable
+from typing import Any, Callable, get_type_hints
 
 from llm import Response
 
@@ -125,3 +125,74 @@ class Tools:
             raise ValueError("final_answer requires a string or an object with an answer string")
         response.content = answer
         return True
+
+
+TYPE_MAP = {str: "string", int: "integer", float: "number", bool: "boolean", list: "array", dict: "object"}
+
+
+def tool_to_schema(function: Callable, name: str | None = None, description: str | None = None) -> dict:
+    """Describe keyword-callable functions with simple Python type annotations."""
+    properties, required = {}, []
+    hints = get_type_hints(function)
+    for key, parameter in inspect.signature(function).parameters.items():
+        if parameter.kind not in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+            raise ValueError("Tools must use named parameters, not positional-only or variadic parameters")
+        annotation = hints.get(key, str)
+        if annotation not in TYPE_MAP:
+            raise ValueError(f"Unsupported tool annotation for {key}: {annotation}")
+        properties[key] = {"type": TYPE_MAP[annotation]}
+        if annotation is list:
+            properties[key]["items"] = {}
+        if parameter.default is inspect.Parameter.empty:
+            required.append(key)
+    return {
+        "type": "function",
+        "function": {
+            "name": name if name is not None else function.__name__,
+            "description": description if description is not None else inspect.getdoc(function) or "",
+            "parameters": {
+                "type": "object", "properties": properties, "required": required,
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+class NativeTools(Tools):
+    """Use structured function calls while executing the same registered tools."""
+
+    native = True
+
+    @property
+    def schemas(self) -> list[dict]:
+        return [
+            tool_to_schema(tool["function"], name=name, description=tool["description"])
+            for name, tool in self.registry.items()
+        ]
+
+    @property
+    def prompt(self) -> str:
+        return ""
+
+    def parse(self, response: Response) -> Response:
+        call = response.tool_call
+        if call is None:
+            return response
+        if not isinstance(call.get("id"), str) or not call["id"]:
+            raise ValueError("Native tool calls require an id for the matching tool result")
+        function = call.get("function")
+        if not isinstance(function, dict) or not isinstance(function.get("name"), str) or not function["name"]:
+            raise ValueError("Native tool call requires a function name")
+        arguments = function.get("arguments", {})
+        if isinstance(arguments, str):
+            arguments = json.loads(arguments)
+        if not isinstance(arguments, dict):
+            raise ValueError("Native tool arguments must be a JSON object")
+        normalized = {"tool": function["name"], "kwargs": arguments, "id": call["id"]}
+        return replace(response, tool_call=normalized)
+
+    def observation(self, result: Any) -> tuple[str, str]:
+        return "tool", str(result)
+
+    def is_done(self, response: Response) -> bool:
+        return response.tool_call is None
