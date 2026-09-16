@@ -7,6 +7,17 @@ from llm import LLM
 
 
 class LLMTests(unittest.TestCase):
+    def test_temperature_including_zero_is_forwarded(self):
+        payload = {
+            "model": "test", "choices": [{"message": {"content": "4"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }
+        for temperature in (0, 1):
+            with self.subTest(temperature=temperature):
+                with patch("llm.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(payload).encode())) as send:
+                    LLM("test", temperature=temperature).generate([])
+                self.assertEqual(json.loads(send.call_args.args[0].data)["temperature"], temperature)
+
     def test_posts_messages_and_parses_text_and_usage(self):
         payload = {
             "model": "test",

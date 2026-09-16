@@ -20,12 +20,14 @@ class LLM:
         base_url: str = "http://localhost:11434/v1",
         api_key: str = "no_key",
         think: bool = False,
+        temperature: float | None = None,
     ):
         """Initialize the LLM with the given model."""
         self.model = model
         self.base_url = base_url
         self.api_key = api_key
         self.think = think
+        self.temperature = temperature
 
     def generate(
         self, messages: list[dict], tools: list | None = None
@@ -36,6 +38,8 @@ class LLM:
             "model": self.model,
             "messages": messages,
         }
+        if self.temperature is not None:
+            body["temperature"] = self.temperature
 
         # Tools and Reasoning
         if tools:
