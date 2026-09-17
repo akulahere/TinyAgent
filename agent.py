@@ -1,5 +1,5 @@
 from llm import LLM, Response
-from memory import Memory
+from memory import Memory, MultimodalMemory
 from planning import ReAct
 from tools import Tools
 from trajectory import Trajectory
@@ -26,9 +26,14 @@ class TinyAgent:
                 prompt += "\n\n" + planner.prompt
             self.memory.add("system", prompt)
 
-    def run(self, task: str) -> str | None:
-        """Run once, or follow the planner until completion or its step limit."""
-        self.memory.add("user", task)
+    def run(self, task: str, image_data: str | None = None) -> str | None:
+        """Run a text/image task once, or follow the planner within its step limit."""
+        if image_data is not None:
+            if not isinstance(self.memory, MultimodalMemory):
+                raise ValueError("Pass MultimodalMemory() to use image_data")
+            self.memory.add("user", task, image_data=image_data)
+        else:
+            self.memory.add("user", task)
         self.trajectory.initialize(task)
         max_steps = self.planner.max_steps if self.planner is not None else 1
         for _ in range(max_steps):
