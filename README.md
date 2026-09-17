@@ -15,6 +15,7 @@
 | 7 — Evaluating Agents | `evaluator.py`: Benchmark, Evaluator, scorers, pass@k/pass^k; `chapter7.ipynb` |
 | 8 — Multi-Agent Systems | `multi_agent.py`: AgentTeam, create_agent_team; today/days_between в `toolbox.py`; `chapter8.ipynb` |
 | 9 — Multi-Modal Understanding | MultimodalMemory в `memory.py`, `TinyAgent.run(..., image_data=...)`, `chapter9.ipynb` |
+| 10 — Code Agents and Code LLMs | CodeWorkspace/make_code_tools в `toolbox.py`, события TinyAgent, `display.py`, `cli.py`, `chapter10.ipynb` |
 
 Без planner агент выполняет один вызов генерации на запрос и записывает результат в траекторию.
 При выборе инструмента агент выполняет его и возвращает observation, без повторной
@@ -57,7 +58,7 @@ python3 -m venv .venv
 .venv/bin/jupyter lab
 ```
 
-Откройте `demo.ipynb` или `chapter3.ipynb`–`chapter9.ipynb`, выберите ядро
+Откройте `demo.ipynb` или `chapter3.ipynb`–`chapter10.ipynb`, выберите ядро
 созданного окружения и запускайте ячейки по порядку. TrajectoryViewer отображается
 в notebook. Файлы сохраняются без ответов модели и истории запусков.
 
@@ -348,6 +349,74 @@ ViT/CLIP, аудио, видео и способы соединения энко
 Код добавляет понимание входных изображений; генерация изображений, аудио/видео
 и обучение мультимодальных моделей не реализованы.
 
+## Coding agent и CLI: глава 10
+
+Из корня проекта, при запущенном Ollama:
+
+```sh
+mkdir -p /tmp/tinyagent-playground
+.venv/bin/python cli.py --workspace /tmp/tinyagent-playground
+```
+
+Например: «Создай calculator.py с функцией сложения и проверь её». `exit`, `quit`,
+Ctrl-D или Ctrl-C завершают чат; пустая строка пропускается. Память сохраняется
+между запросами в одной сессии. Параметры CLI: `--model`, `--base-url`,
+`--max-steps`, `--timeout`, `--no-color`. При необходимости API-ключ читается из
+`TINYAGENT_API_KEY`; по умолчанию используется локальная `gemma4:e4b` с reasoning.
+
+Программная сборка:
+
+```python
+from agent import TinyAgent
+from display import Display
+from llm import LLM
+from planning import NativeReAct
+from toolbox import CodeWorkspace, make_code_tools
+
+workspace = CodeWorkspace("/tmp/tinyagent-playground")  # папка должна существовать
+agent = TinyAgent(
+    LLM("gemma4:e4b", think=True, temperature=0),
+    tools=make_code_tools(workspace),
+    planner=NativeReAct(max_steps=10),
+    display=Display(),
+)
+agent.run("List the files in the workspace.")
+```
+
+- `read_file(path)` читает UTF-8; `list_files(directory=".")` показывает один уровень.
+- `write_file(path, content)` создаёт родительские папки и заменяет содержимое файла.
+- `execute_python(code)` запускает текущий Python в рабочей папке, возвращает stdout
+  и stderr; при ошибке — также exit code. Тайм-аут по умолчанию 30 секунд.
+- `make_code_tools` требует подтверждения **каждого** `write_file` и `execute_python`
+  с показом конкретных аргументов. Пустой ответ `[y/N]` означает отказ. Для приложения
+  можно явно передать `approval(name, kwargs) -> bool`.
+
+**Локальный Python не является песочницей.** Он наследует права и окружение процесса,
+может обращаться к сети и файлам вне рабочей папки. Проверка путей и symlink действует
+на файловые инструменты, а не на произвольный Python. Прямой вызов методов CodeWorkspace
+также не спрашивает разрешение: подтверждения обеспечивает реестр `make_code_tools`.
+На POSIX тайм-аут завершает группу процессов; на других платформах — основной процесс.
+Это не изоляция ресурсов и не защита от намеренно обходящего ограничения кода.
+
+`max_output=20000` ограничивает вывод в observation с явным маркером обрезки. Для
+stdout/stderr это обрезка после сбора данных, не ограничение памяти. Файлы читаются
+только до лимита плюс один символ для обнаружения обрезки.
+
+`Display` показывает THOUGHT, ACTION, OBSERVATION, ANSWER и остановку по лимиту.
+Промежуточный текст при вызове инструмента не помечается окончательным ответом.
+Цвета включаются автоматически в терминале; `--no-color` отключает их. Без `display`
+TinyAgent остаётся без вывода событий. Пользовательский callback получает копию
+Response и не может изменить исполняемые аргументы через этот объект; исключения
+callback передаются вызывающему коду.
+
+В `chapter10.ipynb` используются временная папка и callback, разрешающий только
+конкретный показанный файл и фиксированный расчёт. Проверяются чтение, запись,
+реальное исполнение, отказ и траектория. Это проверка интеграции инструментов,
+а не способность модели самостоятельно написать или исправить произвольную программу.
+
+Hosted execution Gemini, репозиторные карты, SQL, SWE-bench, Agentless и обучение
+coding LLM остаются теорией главы; внешние API и контейнерные сервисы не подключены.
+
 ## Проверки
 
 ```sh
@@ -363,6 +432,8 @@ native-контракт, циклы planner, лимиты шагов, траек
 раздельные истории, лимиты специалистов, ошибки, подтверждения и свежие команды для evals.
 Для главы 9 проверяются image content blocks, URL/base64, сохранение изображений
 в истории и planner, native tool-контракт и фактическое тело HTTP-запроса через mock.
+Для главы 10 проверяются файловые пути и ссылки, подтверждения, Python-процесс,
+stdout/stderr, тайм-аут, события Display, CLI и сохранение истории между запросами.
 Для проверки реального LLM запускайте notebook. Раздел RAG требует отдельной
 embedding-модели; успешные offline-тесты не подтверждают качество её поиска.
 
