@@ -12,6 +12,7 @@
 | 4 — Memory | `memory.py`: Memory, TrimmingMemory, SummarizationMemory, RAGMemory; EmbeddingModel в `llm.py`; `chapter4.ipynb` |
 | 5 — Tools | `tools.py`: Tools, NativeTools, tool_to_schema; `toolbox.py`: multiply; `chapter5.ipynb` |
 | 6 — Planning and Reflection | `planning.py`: ReAct, NativeReAct; цикл с `max_steps` в TinyAgent; add/subtract в `toolbox.py`; `chapter6.ipynb` |
+| 7 — Evaluating Agents | `evaluator.py`: Benchmark, Evaluator, scorers, pass@k/pass^k; `chapter7.ipynb` |
 
 Без planner агент выполняет один вызов генерации на запрос и записывает результат в траекторию.
 При выборе инструмента агент выполняет его и возвращает observation, без повторной
@@ -54,7 +55,7 @@ python3 -m venv .venv
 .venv/bin/jupyter lab
 ```
 
-Откройте `demo.ipynb` или `chapter3.ipynb`–`chapter6.ipynb`, выберите ядро
+Откройте `demo.ipynb` или `chapter3.ipynb`–`chapter7.ipynb`, выберите ядро
 созданного окружения и запускайте ячейки по порядку. TrajectoryViewer отображается
 в notebook. Файлы сохраняются без ответов модели и истории запусков.
 
@@ -175,6 +176,70 @@ print(agent.trajectory.runs)
 Self-Refine, Reflexion и обучение через RL в главе обсуждаются теоретически;
 отдельные механизмы самокритики и обучения здесь не реализованы.
 
+## Оценка агента: глава 7
+
+```python
+from agent import TinyAgent
+from evaluator import Benchmark, Evaluator, exact_match_scorer
+from llm import LLM
+
+llm = LLM(model="gemma4:e4b", temperature=0)
+benchmark = Benchmark(
+    name="Arithmetic: one demonstration question",
+    examples=[{"task": "What is 2 + 2? A) 3 B) 4 C) 5. Answer with only the letter.", "expected": "B"}],
+    scorer=exact_match_scorer,
+)
+result = Evaluator(lambda: TinyAgent(llm)).run(benchmark)
+print(result)
+```
+
+`Evaluator` вызывает фабрику для каждого примера. Она должна возвращать **новый
+TinyAgent** со своей памятью и траекторией; клиент LLM можно переиспользовать.
+Отчёт содержит `name`, `pass_rate` и `results` с полями `task`, `prediction`,
+`completed`, `passed`.
+
+- **exact_match_scorer:** строго одна буква A–J, без учёта регистра и внешних пробелов.
+  Буква внутри объяснения не считается точным совпадением.
+- **programmatic_scorer:** запускает функцию `example["check"]` для непустого ответа.
+  Проверка возвращает boolean или число от 0 до 1.
+- **make_judge_scorer(judge):** передаёт отдельному LLM-клиенту вопрос, эталон и ответ.
+  Ожидает единственное десятичное число от 0 до 1; невалидная оценка вызывает ошибку.
+  Данные отделены от системной инструкции; это не гарантия защиты от prompt injection.
+- Для boolean-scorer `pass_rate` означает долю пройденных задач; для дробных оценок —
+  средний балл. Поле `passed` сохраняет исходную оценку, без скрытого порога.
+- Пустой ответ, observation вместо финального ответа и исчерпание `max_steps`
+  получают ноль без вызова scorer. `completed` описывает завершение протокола,
+  а не правильность ответа. Ошибки HTTP, агента и scorer передаются вызывающему коду;
+  отчёт не выдаётся за успешно завершённую оценку при сбое инфраструктуры.
+
+`chapter7.ipynb` содержит три задания MMLU-Pro из главы, три упрощённые проверки
+IFEval и три открытых вопроса с LLM-судьёй. Это учебные подвыборки и эвристики,
+**не официальный запуск бенчмарков**. Проверка длины или отсутствия запятой не
+оценивает смысл и стиль ответа. Ожидаемые ответы в notebook следуют примерам книги.
+
+Для запуска без внешнего API судья по умолчанию использует ту же локальную
+`gemma4:e4b`, с `think=False`. Это демонстрация оценщика, не независимое подтверждение
+качества. В книге используется внешний судья Gemini; здесь можно явно передать
+другой настроенный `LLM` в `make_judge_scorer`.
+
+Метрики для повторных запусков **одного задания** с бинарной проверкой:
+
+```python
+from evaluator import pass_at_k, pass_hat_k
+
+print(pass_at_k(10, 6, 3))   # ≈ 0.967: хотя бы один успех среди трёх попыток
+print(pass_hat_k(10, 6, 3))  # ≈ 0.167: все три попытки успешны
+```
+
+Аргументы — общее число запусков `n`, число успехов `c` и число выбираемых попыток
+`k`: `0 <= c <= n`, `1 <= k <= n`. Расчёт использует выбор без возвращения;
+при `k=1` обе метрики равны `c/n`. Пример синтетический, не оценка Gemma.
+Дробные баллы судьи и ответы на разные задания нельзя считать такими попытками.
+
+Rubric-based evaluation, проверка траекторий и safety-бенчмарки в главе обсуждаются
+концептуально. Новых отдельных подсистем для них нет; `Evaluator` оценивает итог,
+а траектории по-прежнему можно изучать через `agent.trajectory` и TrajectoryViewer.
+
 ## Проверки
 
 ```sh
@@ -184,6 +249,8 @@ python3 -B -m unittest discover -s tests -v
 Тесты работают без сервера и загрузки моделей: проверяют HTTP-контракт через mock,
 историю диалога, обрезку, суммаризацию, RAG, выполнение инструментов, подтверждения,
 native-контракт, циклы planner, лимиты шагов, траекторию и код notebook-примеров.
+Для главы 7 проверяются изоляция примеров, scorers, незавершённые ответы, ошибки
+судьи и формулы метрик (включая полный перебор небольших наборов попыток).
 Для проверки реального LLM запускайте notebook. Раздел RAG требует отдельной
 embedding-модели; успешные offline-тесты не подтверждают качество её поиска.
 
