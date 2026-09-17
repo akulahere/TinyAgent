@@ -13,6 +13,7 @@
 | 5 — Tools | `tools.py`: Tools, NativeTools, tool_to_schema; `toolbox.py`: multiply; `chapter5.ipynb` |
 | 6 — Planning and Reflection | `planning.py`: ReAct, NativeReAct; цикл с `max_steps` в TinyAgent; add/subtract в `toolbox.py`; `chapter6.ipynb` |
 | 7 — Evaluating Agents | `evaluator.py`: Benchmark, Evaluator, scorers, pass@k/pass^k; `chapter7.ipynb` |
+| 8 — Multi-Agent Systems | `multi_agent.py`: AgentTeam, create_agent_team; today/days_between в `toolbox.py`; `chapter8.ipynb` |
 
 Без planner агент выполняет один вызов генерации на запрос и записывает результат в траекторию.
 При выборе инструмента агент выполняет его и возвращает observation, без повторной
@@ -55,7 +56,7 @@ python3 -m venv .venv
 .venv/bin/jupyter lab
 ```
 
-Откройте `demo.ipynb` или `chapter3.ipynb`–`chapter7.ipynb`, выберите ядро
+Откройте `demo.ipynb` или `chapter3.ipynb`–`chapter8.ipynb`, выберите ядро
 созданного окружения и запускайте ячейки по порядку. TrajectoryViewer отображается
 в notebook. Файлы сохраняются без ответов модели и истории запусков.
 
@@ -240,6 +241,58 @@ Rubric-based evaluation, проверка траекторий и safety-бен�
 концептуально. Новых отдельных подсистем для них нет; `Evaluator` оценивает итог,
 а траектории по-прежнему можно изучать через `agent.trajectory` и TrajectoryViewer.
 
+## Несколько агентов: глава 8
+
+```python
+from llm import LLM
+from multi_agent import create_agent_team
+
+team = create_agent_team(LLM(model="gemma4:e4b", think=True, temperature=0), max_steps=6)
+answer = team.orchestrator_agent.run(
+    "If I save EUR 4 per day starting today and stopping before 2030-12-31, "
+    "how much will I save? Ask the date specialist to get today and compute "
+    "the date difference with its tools, then ask the math specialist to "
+    "multiply that number of days by 4 with its tool. Exclude the end date."
+)
+print(answer)
+print(team.orchestrator_agent.trajectory.runs)
+print(team.date_agent.trajectory.runs)
+print(team.math_agent.trajectory.runs)
+```
+
+Оркестратор имеет два инструмента: `ask_date_agent(question)` и
+`ask_math_agent(question)`. Это функции, вызывающие других TinyAgent:
+
+- **Агент дат:** `today()` возвращает локальную дату компьютера;
+  `days_between(a, b)` считает `b - a` для ISO-дат, без прибавления единицы.
+  Одинаковые даты дают 0, обратный порядок — отрицательное число.
+- **Математик:** `add`, `subtract`, `multiply`.
+- **Оркестратор:** выбирает специалиста, получает его финальный ответ как observation
+  и продолжает свой цикл. Он не получает внутреннюю историю специалиста.
+
+Система централизованная, вызовы синхронные. Клиент LLM общий, но память, planner,
+инструменты и траектория у каждого агента собственные. Повторные запросы к той же
+команде сохраняют истории; `create_agent_team` создаёт свежую команду. Для независимых
+оценок главы 7 передавайте `Evaluator(lambda: create_agent_team(llm).orchestrator_agent)`.
+
+`max_steps` ограничивает каждый `run()`, включая каждое делегирование, отдельно.
+Общего бюджета нет: при лимите `S` эта фиксированная схема допускает до `S + S²`
+запросов генерации. Вложенные вызовы не выполняются параллельно; лимит не ограничивает
+токены или время. Исчерпание лимита специалиста, пустой ответ или исключение дают
+ошибочный observation у оркестратора; он может повторить запрос в пределах своего
+лимита. Финальный ответ оркестратора не гарантирует успешного выполнения подзадач.
+
+Подтверждения `requires_approval` задаются отдельно в реестре оркестратора и
+реестрах специалистов. Встроенные инструменты примера читают дату и считают числа.
+
+В `chapter8.ipynb` проверяется реальная цепочка делегирования и аргументы инструментов;
+TrajectoryViewer показывает все три траектории. Пример накоплений использует
+интервал от сегодня до **2030-12-31, исключая конечную дату**, поэтому ожидаемая
+сумма вычисляется из фактической даты запуска, а не копируется из книги.
+
+CAMEL, MetaGPT, A2A, социальные симуляции и research-системы описаны в главе
+теоретически. Они не подключаются; код реализует паттерн «агенты как инструменты».
+
 ## Проверки
 
 ```sh
@@ -251,6 +304,8 @@ python3 -B -m unittest discover -s tests -v
 native-контракт, циклы planner, лимиты шагов, траекторию и код notebook-примеров.
 Для главы 7 проверяются изоляция примеров, scorers, незавершённые ответы, ошибки
 судьи и формулы метрик (включая полный перебор небольших наборов попыток).
+Для главы 8 проверяются даты, вложенные вызовы с реальными результатами инструментов,
+раздельные истории, лимиты специалистов, ошибки, подтверждения и свежие команды для evals.
 Для проверки реального LLM запускайте notebook. Раздел RAG требует отдельной
 embedding-модели; успешные offline-тесты не подтверждают качество её поиска.
 
