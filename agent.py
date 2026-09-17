@@ -1,3 +1,6 @@
+from collections.abc import Callable
+from copy import deepcopy
+
 from llm import LLM, Response
 from memory import Memory, MultimodalMemory
 from planning import ReAct
@@ -11,6 +14,7 @@ class TinyAgent:
     def __init__(
         self, llm: LLM, memory: Memory | None = None,
         tools: Tools | None = None, planner: ReAct | None = None,
+        display: Callable[[str, Response | str | None], None] | None = None,
     ):
         if planner is not None and (tools is None or planner.native != tools.native):
             raise ValueError("Pair ReAct with Tools, or NativeReAct with NativeTools")
@@ -18,6 +22,7 @@ class TinyAgent:
         self.memory = memory if memory is not None else Memory()
         self.tools = tools
         self.planner = planner
+        self.display = display
 
         self.trajectory = Trajectory()
         if tools is not None:
@@ -40,15 +45,23 @@ class TinyAgent:
             done, result = self._step()
             if done or self.planner is None:
                 return result
-        return "Max steps reached without completion."
+        result = "Max steps reached without completion."
+        self._emit("limit", result)
+        return result
+
+    def _emit(self, event: str, data: Response | str | None = None) -> None:
+        if self.display is not None:
+            self.display(event, deepcopy(data))
 
     def _step(self) -> tuple[bool, str | None]:
         """Perform one generation and return (completed, answer or observation)."""
         messages = self.memory.get_messages()
+        self._emit("thinking")
         if self.tools is None:
             response = self.llm.generate(messages)
             self.trajectory.add(response)
             self.memory.add("assistant", response.content)
+            self._emit("response", response)
             return True, response.content
 
         raw = self.llm.generate(messages, tools=self.tools.schemas)
@@ -56,7 +69,9 @@ class TinyAgent:
         response = self.tools.parse(planned)
         if self.planner is not None and not self.tools.native and response.tool_call is None:
             raise ValueError("ReAct ACTION must contain a tool call or final_answer")
-        if self.tools.is_done(response):
+        done = self.tools.is_done(response)
+        self._emit("response", response)
+        if done:
             self.trajectory.add(response)
             self.memory.add("assistant", response.content)
             return True, response.content
@@ -71,6 +86,7 @@ class TinyAgent:
 
     def _execute_action(self, response: Response) -> str:
         """Execute a tool action."""
+        self._emit("tool_call", response)
         result = self.tools.execute(response)
         role, observation = self.tools.observation(result)
         self.trajectory.add(response, observation)
@@ -79,4 +95,5 @@ class TinyAgent:
             role, observation, is_observation=True,
             defer_summary=self.planner is not None, **extra,
         )
+        self._emit("observation", observation)
         return observation
