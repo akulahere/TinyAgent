@@ -61,7 +61,7 @@ class SummarizationMemory(Memory):
 
     def add(self, role: str, content: str | None, **kwargs) -> None:
         super().add(role, content, **kwargs)
-        completed = (role == "assistant" and not kwargs.get("defer_summary")) or kwargs.get("is_observation")
+        completed = (role == "assistant" or kwargs.get("is_observation")) and not kwargs.get("defer_summary")
         if not completed:
             return
 

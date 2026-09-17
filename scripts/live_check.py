@@ -11,7 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent import TinyAgent
 from llm import EmbeddingModel, LLM
 from memory import Memory, RAGMemory, SummarizationMemory, TrimmingMemory
-from toolbox import multiply
+from planning import NativeReAct, ReAct
+from toolbox import add, multiply, subtract
 from tools import NativeTools, Tools
 
 
@@ -27,6 +28,7 @@ def main() -> None:
     parser.add_argument("--rag", action="store_true", help="Also check retrieval; requires an installed embedding model")
     parser.add_argument("--embedding-model", default="embeddinggemma")
     parser.add_argument("--tools", action="store_true", help="Also check prompt and native tool execution")
+    parser.add_argument("--planning", action="store_true", help="Also check full ReAct and NativeReAct arithmetic runs")
     args = parser.parse_args()
     socket.setdefaulttimeout(120)
     llm = LLM(args.model, base_url=args.base_url, temperature=0)
@@ -57,6 +59,31 @@ def main() -> None:
             answer = agent.run("State the previous tool result without calling any tools. Be concise.")
             require_words(answer, "37.23")
             print(f"PASS {registry_type.__name__}: {result}; follow-up: {answer}", flush=True)
+
+    if args.planning:
+        for registry_type, planner_type in ((Tools, ReAct), (NativeTools, NativeReAct)):
+            tools = registry_type()
+            for function in (add, multiply, subtract):
+                tools.add_tool(function.__name__, function,
+                               f"{function.__name__}(a: str, b: str): {function.__doc__}")
+            planning_llm = LLM(args.model, base_url=args.base_url, think=tools.native, temperature=0)
+            agent = TinyAgent(planning_llm, tools=tools, planner=planner_type(max_steps=6))
+            answer = agent.run(
+                "Use the available tools to calculate (4.6 + 6.685) * 4 - 3.14. "
+                "Perform each arithmetic operation with its tool and give the final answer."
+            )
+            steps = agent.trajectory.runs[0]["steps"]
+            actions = [step for step in steps if step.observation is not None]
+            if [step.action["tool"] for step in actions] != ["add", "multiply", "subtract"]:
+                raise AssertionError(f"Expected add, multiply, subtract, got: {actions!r}")
+            for step, expected in zip(actions, (11.285, 45.14, 42.0)):
+                actual = float(step.observation.removeprefix("OBSERVATION: "))
+                if not math.isclose(actual, expected, rel_tol=0, abs_tol=1e-9):
+                    raise AssertionError(f"Wrong observation: {actual}; expected {expected}")
+            if len(steps) != 4 or steps[-1].answer != answer or steps[-1].observation is not None:
+                raise AssertionError(f"Expected three tool steps followed by a final answer: {steps!r}")
+            require_words(answer, "42")
+            print(f"PASS {planner_type.__name__}: add → multiply → subtract → {answer}", flush=True)
 
     if args.rag:
         embedding = EmbeddingModel(args.embedding_model, base_url=args.base_url)
