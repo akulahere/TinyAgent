@@ -102,3 +102,29 @@ def make_judge_scorer(judge: LLM) -> Scorer:
         return float(text)
 
     return judge_scorer
+
+
+def _validate_samples(n_samples: int, n_correct_samples: int, k: int) -> None:
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in (n_samples, n_correct_samples, k)):
+        raise ValueError("Sample counts and k must be integers")
+    if not 0 <= n_correct_samples <= n_samples or not 1 <= k <= n_samples:
+        raise ValueError("Require 0 <= correct <= samples and 1 <= k <= samples")
+
+
+def pass_at_k(n_samples: int, n_correct_samples: int, k: int) -> float:
+    """Estimate the probability that at least one of k sampled attempts succeeds."""
+    _validate_samples(n_samples, n_correct_samples, k)
+    if n_samples - n_correct_samples < k:
+        return 1.0
+    return 1.0 - math.prod(
+        1.0 - k / value
+        for value in range(n_samples - n_correct_samples + 1, n_samples + 1)
+    )
+
+
+def pass_hat_k(n_samples: int, n_correct_samples: int, k: int) -> float:
+    """Estimate the probability that all k sampled attempts succeed (pass^k)."""
+    _validate_samples(n_samples, n_correct_samples, k)
+    if n_correct_samples < k:
+        return 0.0
+    return math.comb(n_correct_samples, k) / math.comb(n_samples, k)
