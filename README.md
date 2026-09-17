@@ -14,6 +14,7 @@
 | 6 — Planning and Reflection | `planning.py`: ReAct, NativeReAct; цикл с `max_steps` в TinyAgent; add/subtract в `toolbox.py`; `chapter6.ipynb` |
 | 7 — Evaluating Agents | `evaluator.py`: Benchmark, Evaluator, scorers, pass@k/pass^k; `chapter7.ipynb` |
 | 8 — Multi-Agent Systems | `multi_agent.py`: AgentTeam, create_agent_team; today/days_between в `toolbox.py`; `chapter8.ipynb` |
+| 9 — Multi-Modal Understanding | MultimodalMemory в `memory.py`, `TinyAgent.run(..., image_data=...)`, `chapter9.ipynb` |
 
 Без planner агент выполняет один вызов генерации на запрос и записывает результат в траекторию.
 При выборе инструмента агент выполняет его и возвращает observation, без повторной
@@ -56,7 +57,7 @@ python3 -m venv .venv
 .venv/bin/jupyter lab
 ```
 
-Откройте `demo.ipynb` или `chapter3.ipynb`–`chapter8.ipynb`, выберите ядро
+Откройте `demo.ipynb` или `chapter3.ipynb`–`chapter9.ipynb`, выберите ядро
 созданного окружения и запускайте ячейки по порядку. TrajectoryViewer отображается
 в notebook. Файлы сохраняются без ответов модели и истории запусков.
 
@@ -293,6 +294,60 @@ TrajectoryViewer показывает все три траектории. При
 CAMEL, MetaGPT, A2A, социальные симуляции и research-системы описаны в главе
 теоретически. Они не подключаются; код реализует паттерн «агенты как инструменты».
 
+## Изображения: глава 9
+
+```python
+import base64
+from pathlib import Path
+
+from agent import TinyAgent
+from llm import LLM
+from memory import MultimodalMemory
+
+agent = TinyAgent(
+    llm=LLM(model="gemma4:e4b", think=True, temperature=0),
+    memory=MultimodalMemory(),
+)
+image_data = base64.b64encode(Path("examples/vision/shapes.png").read_bytes()).decode("ascii")
+print(agent.run("Describe the shapes and their colors from left to right.", image_data=image_data))
+print(agent.run("What color was the circle?"))
+```
+
+`MultimodalMemory` сохраняет пользовательское сообщение с двумя блоками `content`:
+`image_url` и `text`. `LLM.generate` уже передаёт такую структуру через JSON;
+кодирование изображения в vision tokens выполняет сервер модели.
+
+`image_data` принимает HTTP(S)-URL, raw base64 для **PNG** или полный data URL
+с MIME-типом `image/png`, `image/jpeg`, `image/webp`, `image/gif`. Для JPEG и других
+форматов используйте полный data URL с правильным MIME-типом. Это не путь к файлу:
+локальный файл сначала нужно прочитать и закодировать, как в примере выше.
+
+Проверяется формат URL/base64, а не содержимое декодированного файла. Поддержка
+форматов и загрузки внешних URL зависит от backend; наш код URL не скачивает.
+Живой notebook использует локальный PNG через base64, без внешних запросов за картинкой.
+Файл `examples/vision/shapes.png` создан для проекта; его можно воспроизвести командой
+`python3 scripts/create_vision_fixture.py` без дополнительных зависимостей.
+
+Изображение остаётся в истории и отправляется при следующих запросах, включая
+шаги planner. Сохраняются native tool calls и соответствующие observations.
+В `chapter9.ipynb` есть сравнение запроса без картинки и с картинкой, вопрос по истории,
+а также пример «посчитать видимые фигуры → вызвать multiply → ответить».
+
+- Используйте `MultimodalMemory()` явно; другие виды памяти отклоняются при передаче
+  `image_data`, чтобы изображение не потерялось и не попало в неверное поле API.
+- Один запрос принимает одно изображение. Можно добавлять новые изображения
+  следующими запросами; история хранится в RAM, без сжатия и лимита токенов.
+- Траектория содержит исходный текст вопроса и шаги, но не байты изображения.
+  TrajectoryViewer показывает ответы и действия; картинка отображается отдельно.
+- Vision-модель должна поддерживаться используемым inference-сервером.
+  Ошибка backend передаётся вызывающему коду; ответ при ошибке не создаётся.
+- В многоагентной сборке главы 8 делегирования остаются текстовыми: изображения
+  автоматически не передаются специалистам.
+
+ViT/CLIP, аудио, видео и способы соединения энкодеров с LLM — теория главы.
+Код добавляет понимание входных изображений; генерация изображений, аудио/видео
+и обучение мультимодальных моделей не реализованы.
+
 ## Проверки
 
 ```sh
@@ -306,6 +361,8 @@ native-контракт, циклы planner, лимиты шагов, траек
 судьи и формулы метрик (включая полный перебор небольших наборов попыток).
 Для главы 8 проверяются даты, вложенные вызовы с реальными результатами инструментов,
 раздельные истории, лимиты специалистов, ошибки, подтверждения и свежие команды для evals.
+Для главы 9 проверяются image content blocks, URL/base64, сохранение изображений
+в истории и planner, native tool-контракт и фактическое тело HTTP-запроса через mock.
 Для проверки реального LLM запускайте notebook. Раздел RAG требует отдельной
 embedding-модели; успешные offline-тесты не подтверждают качество её поиска.
 
