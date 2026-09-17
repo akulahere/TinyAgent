@@ -1,7 +1,13 @@
 from copy import deepcopy
+import base64
+import binascii
 import json
+import re
+from urllib.parse import urlsplit
 
 from llm import EmbeddingModel, LLM
+
+MessageContent = str | list[dict] | None
 
 
 class Memory:
@@ -11,11 +17,11 @@ class Memory:
         self.messages: list[dict] = []
 
     def add(
-        self, role: str, content: str | None, tool_call: dict | None = None,
+        self, role: str, content: MessageContent, tool_call: dict | None = None,
         *, is_observation: bool = False, defer_summary: bool = False, **kwargs
     ) -> None:
         """Store a message and optional tool metadata."""
-        message = {**kwargs, "role": role, "content": content}
+        message = {**kwargs, "role": role, "content": deepcopy(content)}
         if tool_call is not None:
             message["tool_calls"] = [deepcopy(tool_call)]
         if is_observation:
@@ -28,6 +34,53 @@ class Memory:
         for message in messages:
             message.pop("_observation", None)
         return messages
+
+
+class MultimodalMemory(Memory):
+    """Store text and one image per user message in the chat content format."""
+
+    def add(
+        self, role: str, content: MessageContent, tool_call: dict | None = None,
+        *, image_data: str | None = None, **kwargs,
+    ) -> None:
+        if image_data is not None:
+            if role != "user" or not isinstance(content, str) or kwargs.get("is_observation"):
+                raise ValueError("Images require a user message with a text prompt")
+            content = [
+                {"type": "image_url", "image_url": {"url": self._image_url(image_data)}},
+                {"type": "text", "text": content},
+            ]
+        super().add(role, content, tool_call=tool_call, **kwargs)
+
+    @staticmethod
+    def _image_url(image_data: str) -> str:
+        """Accept HTTP(S), a supported image data URL, or raw base64 PNG bytes.
+
+        Validate the transport syntax, not the decoded image. Remote URLs are
+        forwarded unchanged; the inference server decides whether to fetch them.
+        """
+        if not isinstance(image_data, str) or not image_data:
+            raise ValueError("image_data must be a nonempty string")
+        if image_data.startswith(("http://", "https://")):
+            if not urlsplit(image_data).hostname:
+                raise ValueError("Image URL must include a host")
+            return image_data
+        if image_data.startswith("data:"):
+            match = re.fullmatch(r"data:image/(png|jpeg|webp|gif);base64,(.+)", image_data)
+            if match is None:
+                raise ValueError("Use a base64 data URL for PNG, JPEG, WebP, or GIF")
+            encoded = match[2]
+            url = image_data
+        else:
+            encoded = image_data
+            url = f"data:image/png;base64,{encoded}"
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("Image data must be valid base64") from None
+        if not decoded:
+            raise ValueError("Image data must not be empty")
+        return url
 
 
 class TrimmingMemory(Memory):
